@@ -222,7 +222,7 @@ install_node() {
 
 install_spacetimedb() {
     print_section "Installing SpacetimeDB CLI"
-    if check_command_exists "spacetime" && version_greater_or_equal "$(extract_version "$(spacetime version 2>&1)")" "$MIN_SPACETIMEDB_VERSION"; then
+    if check_command_exists "spacetime" && version_greater_or_equal "$(extract_version "$(spacetime --version 2>&1)")" "$MIN_SPACETIMEDB_VERSION"; then
         echo -e "  ${OK} SpacetimeDB CLI already installed"
         return 0
     fi
@@ -502,7 +502,7 @@ run_verification() {
     # SpacetimeDB CLI
     if check_command_exists "spacetime"; then
         local spacetime_version
-        spacetime_version=$(extract_version "$(spacetime version 2>&1)")
+        spacetime_version=$(extract_version "$(spacetime --version 2>&1)")
         if [ -n "$spacetime_version" ] && version_greater_or_equal "$spacetime_version" "$MIN_SPACETIMEDB_VERSION"; then
             verify_check "SpacetimeDB CLI v${spacetime_version}" 0
         else
