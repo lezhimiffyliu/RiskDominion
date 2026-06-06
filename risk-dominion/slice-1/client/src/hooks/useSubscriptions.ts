@@ -15,6 +15,7 @@ export interface SubscriptionState {
   players:   PlayerRow[];
   gameState: GameStateRow[];
   connected: boolean;
+  connectionError: string | null;
   client:    DbConnection | null;
 }
 
@@ -36,6 +37,7 @@ export function useSubscriptions(): SubscriptionState {
   const [players,   setPlayers]   = useState<PlayerRow[]>([]);
   const [gameState, setGameState] = useState<GameStateRow[]>([]);
   const [connected, setConnected] = useState(false);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
   const connRef = useRef<DbConnection | null>(null);
   const [, forceUpdate] = useState(0);
 
@@ -52,6 +54,7 @@ export function useSubscriptions(): SubscriptionState {
     const conn = DbConnection.builder(SPACETIMEDB_URI, MODULE_NAME)
       .onConnect(() => {
         setConnected(true);
+        setConnectionError(null);
         connRef.current = conn;
         forceUpdate((n) => n + 1);
 
@@ -67,10 +70,13 @@ export function useSubscriptions(): SubscriptionState {
       })
       .onConnectError((_ctx, err) => {
         console.error('SpacetimeDB connect error:', err);
+        setConnected(false);
+        setConnectionError(err?.message ?? String(err));
       })
       .onDisconnect((_ctx, err) => {
         if (err) console.warn('SpacetimeDB disconnected:', err);
         setConnected(false);
+        if (err) setConnectionError(err.message ?? String(err));
       })
       .build();
 
@@ -85,6 +91,7 @@ export function useSubscriptions(): SubscriptionState {
     players,
     gameState,
     connected,
+    connectionError,
     client: connRef.current,
   };
 }

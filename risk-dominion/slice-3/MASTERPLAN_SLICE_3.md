@@ -210,6 +210,9 @@ Schedule: every 30 seconds (30000ms). Use `#[spacetimedb(scheduled)]`.
 
 ### 4.8 Updated AI Prompt Construction
 
+> ⚠️ **Architecture correction (see BUGS.md Issue #2)**
+> This step updates the prompt/snapshot built by `ai_reasoning_cycle`. Per Issue #2, the Anthropic API call and prompt construction **cannot live inside a SpacetimeDB reducer**: a module runs in a sandboxed, deterministic WASM environment and reducers **cannot make outbound network calls** or **spawn OS threads**. The LLM integration belongs in an external bot/client process (a separate Node or Rust program) that: (1) connects to SpacetimeDB as a client over the websocket SDK, (2) subscribes to the game-state tables, (3) makes the Anthropic API calls itself, and (4) calls reducers (e.g. `ai_submit_actions`) with the AI's chosen actions. Apply the Cultural-data snapshot/prompt changes below in that external bot's prompt-construction code, not in the module reducer.
+
 In `ai_reasoning_cycle`, update the game state snapshot to include Cultural data. Update the territory list format:
 
 ```

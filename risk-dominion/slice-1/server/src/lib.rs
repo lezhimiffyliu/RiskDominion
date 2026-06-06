@@ -110,18 +110,26 @@ pub fn start_game(ctx: &ReducerContext) {
 }
 
 #[reducer]
-pub fn military_attack(ctx: &ReducerContext, territory_id: i32, player_id: i32) {
+pub fn military_attack(ctx: &ReducerContext, territory_id: i32, player_id: i32) -> Result<(), String> {
     if let Some(status) = ctx.db.game_state().key().find(&"status".to_string()) {
-        if status.value != "active" { return; }
+        if status.value != "active" {
+            return Err(format!("game is not active (status = {})", status.value));
+        }
     }
-    if player_id != 1 && player_id != 2 { return; }
-    if territory_id < 1 || territory_id > 12 { return; }
+    if player_id != 1 && player_id != 2 {
+        return Err(format!("invalid player_id {player_id} (expected 1 or 2)"));
+    }
+    if territory_id < 1 || territory_id > 12 {
+        return Err(format!("territory_id {territory_id} out of range (expected 1-12)"));
+    }
 
     let player = match ctx.db.players().player_id().find(&player_id) {
         Some(p) => p,
-        None => return,
+        None => return Err(format!("player {player_id} not found")),
     };
-    if player.action_points < 1 { return; }
+    if player.action_points < 1 {
+        return Err(format!("player {player_id} has no action points"));
+    }
 
     let adjacent = get_adjacent(territory_id);
     let best_adjacent = adjacent.iter()
@@ -131,12 +139,14 @@ pub fn military_attack(ctx: &ReducerContext, territory_id: i32, player_id: i32) 
 
     let attacker = match best_adjacent {
         Some(a) => a,
-        None => return,
+        None => return Err(format!(
+            "player {player_id} owns no territory adjacent to {territory_id} to attack from"
+        )),
     };
 
     let target = match ctx.db.military().territory_id().find(&territory_id) {
         Some(t) => t,
-        None => return,
+        None => return Err(format!("military territory {territory_id} not found")),
     };
 
     ctx.db.players().player_id().update(Players {
@@ -163,25 +173,34 @@ pub fn military_attack(ctx: &ReducerContext, territory_id: i32, player_id: i32) 
             troop_count: new_troops,
         });
     }
+    Ok(())
 }
 
 #[reducer]
-pub fn economic_invest(ctx: &ReducerContext, territory_id: i32, player_id: i32) {
+pub fn economic_invest(ctx: &ReducerContext, territory_id: i32, player_id: i32) -> Result<(), String> {
     if let Some(status) = ctx.db.game_state().key().find(&"status".to_string()) {
-        if status.value != "active" { return; }
+        if status.value != "active" {
+            return Err(format!("game is not active (status = {})", status.value));
+        }
     }
-    if player_id != 1 && player_id != 2 { return; }
-    if territory_id < 1 || territory_id > 12 { return; }
+    if player_id != 1 && player_id != 2 {
+        return Err(format!("invalid player_id {player_id} (expected 1 or 2)"));
+    }
+    if territory_id < 1 || territory_id > 12 {
+        return Err(format!("territory_id {territory_id} out of range (expected 1-12)"));
+    }
 
     let player = match ctx.db.players().player_id().find(&player_id) {
         Some(p) => p,
-        None => return,
+        None => return Err(format!("player {player_id} not found")),
     };
-    if player.action_points < 1 { return; }
+    if player.action_points < 1 {
+        return Err(format!("player {player_id} has no action points"));
+    }
 
     let target = match ctx.db.economic().territory_id().find(&territory_id) {
         Some(t) => t,
-        None => return,
+        None => return Err(format!("economic territory {territory_id} not found")),
     };
 
     ctx.db.players().player_id().update(Players {
@@ -202,6 +221,7 @@ pub fn economic_invest(ctx: &ReducerContext, territory_id: i32, player_id: i32) 
     if player_id != current_owner {
         check_win_condition(ctx, player_id);
     }
+    Ok(())
 }
 
 #[reducer]

@@ -77,6 +77,9 @@ When a reducer mutates a table row, SpacetimeDB automatically delivers the chang
 
 ## AI Orchestration
 
+> ⚠️ **Architecture correction (see BUGS.md Issue #2)**
+> The orchestration described in this section places the Anthropic API calls *inside* SpacetimeDB reducers, using `reqwest::blocking::Client` + `std::thread::spawn`. This is **not possible**: a SpacetimeDB module runs in a sandboxed, deterministic WASM environment, so reducers **cannot make outbound network calls** (they cannot reach `https://api.anthropic.com`) and **cannot spawn OS threads**. The LLM integration must move **out of the module** into an external bot/client process (a separate Node or Rust program) that: (1) connects to SpacetimeDB as a client over the websocket SDK, (2) subscribes to the game-state tables, (3) makes the Anthropic API calls itself, and (4) calls reducers (e.g. `ai_submit_actions`) with the AI's chosen actions. The text below is preserved to convey the intended pipeline (snapshots, prompts, persona, hierarchy), but the reducers themselves must be thin: they record/apply actions and logs, while the external bot performs all network, LLM, and threading work.
+
 ### Single-Agent Architecture (Slices 2 through 4)
 
 In Slices 2 through 4, each AI opponent's reasoning cycle makes one Claude API call. The scheduled reducer fires, builds a game state snapshot (all dimension tables, player states, adjacency map), constructs a prompt with the AI's persona description, and spawns a thread to call the Anthropic API. The thread uses `reqwest::blocking::Client` with a 30-second timeout. On success, the thread parses the JSON action array and calls `ai_submit_actions`. On timeout or error, `cycle_status` is reset to `idle` and a timeout event is written to the event feed.

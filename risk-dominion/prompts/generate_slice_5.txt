@@ -29,6 +29,14 @@ Read these files in full before generating:
 
 Modify the existing Slice 4 codebase. Do not regenerate from scratch. Do not create a new project. Apply the changes specified in the masterplan in the order specified. Output every changed file with MODIFIED or NEW at the top.
 
+⚠️ Architecture correction (see BUGS.md Issue #2)
+The instructions below tell the SpacetimeDB server module to run a multi-thread (4 specialists + 1 commander) Claude pipeline inside ai_reasoning_cycle using std::thread::spawn + reqwest::blocking::Client. This is NOT possible. A SpacetimeDB module runs in a sandboxed, deterministic WASM environment: reducers cannot make outbound network calls (so they cannot reach https://api.anthropic.com) and cannot spawn OS threads. Ignore the reqwest/thread::spawn guidance for the module itself. Instead, move the entire specialist/commander pipeline OUT of the module into an external bot/client process (a separate Node or Rust program) that:
+1. Connects to SpacetimeDB as a client over the websocket SDK,
+2. Subscribes to the game-state tables,
+3. Makes the Anthropic API calls itself (the parallel specialist + commander fan-out happens here, in real OS threads / async),
+4. Calls reducers (e.g. ai_submit_actions) with the AI's chosen actions and reasoning log rows.
+The reducer text below is preserved for intent only; treat the module side as a thin reducer that just records/applies the submitted actions and logs, and let the external bot do all network/LLM/threading work.
+
 Key constraints:
 - Replace the entire body of ai_reasoning_cycle. Do not preserve the old single-call logic. The new logic spawns 4 specialist threads, collects their JoinHandles, waits for all to complete or timeout, then spawns a commander thread.
 - Specialist threads: 15-second timeout each. Temperature 0.3. Max tokens 150. On timeout or error, return empty result — do not crash.

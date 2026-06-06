@@ -5,8 +5,11 @@ export const ECONOMIC_INVEST_AMOUNT = 5;
 export const WIN_UNIFIED_TERRITORIES = 3;
 export const TOTAL_TERRITORIES = 12;
 
-export const SPACETIMEDB_URI = 'ws://localhost:3000';
-export const MODULE_NAME = 'risk-dominion';
+// Driven by Vite env (slice-1/client/.env.local, written by setup.sh) so the port
+// is configurable from one place instead of being hardcoded here (Issue #6).
+// Falls back to the documented defaults when no env file is present.
+export const SPACETIMEDB_URI = import.meta.env.VITE_SPACETIMEDB_URI ?? 'ws://localhost:3000';
+export const MODULE_NAME = import.meta.env.VITE_MODULE_NAME ?? 'risk-dominion';
 
 export const TERRITORY_NAMES: Record<number, string> = {
   1: 'North America', 2: 'Central America', 3: 'Caribbean',

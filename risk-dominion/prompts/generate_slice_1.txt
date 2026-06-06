@@ -32,3 +32,19 @@ Success criteria. After generation, the application must:
 5. Trigger victory overlay on both tabs when a player unifies 3 territories.
 
 Generate now. Output every file.
+
+After generation — deploy and run (these steps are required; generating the code alone does not
+produce a working app). Targets SpacetimeDB 1.12.0 exactly (the module will not run on 2.x):
+
+1. spacetime start                    # in its own terminal; note the listen port (default 127.0.0.1:3000)
+2. spacetime login                    # required before publish on modern SpacetimeDB
+3. spacetime publish --project-path slice-1/server risk-dominion
+4. spacetime generate --lang typescript \
+     --out-dir slice-1/client/src/module_bindings \
+     --project-path slice-1/server
+5. cd slice-1/client && npm install && npm run dev, then open http://localhost:5173
+
+The server's listen port must match the client's VITE_SPACETIMEDB_URI (read from
+slice-1/client/.env.local; default ws://localhost:3000). If port 3000 is busy, start with
+spacetime start --listen-addr 127.0.0.1:<port> and set the matching VITE_SPACETIMEDB_URI.
+Re-run publish after server code changes, and re-run generate after table/reducer signature changes.

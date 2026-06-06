@@ -154,6 +154,9 @@ player_id: (the AI's player_id)
 
 ## 3. NEW CLIENT-FACING REDUCERS
 
+> ⚠️ **Architecture correction (see BUGS.md Issue #2)**
+> The query reducers in this section (`query_database`, `get_canned_query`, `autocomplete_query`) are specified to call Claude from inside the reducer via `std::thread::spawn` + `reqwest::blocking::Client`. This is **not possible**: a SpacetimeDB module runs in a sandboxed, deterministic WASM environment, so reducers **cannot make outbound network calls** (they cannot reach `https://api.anthropic.com`) and **cannot spawn OS threads**. Move the LLM integration **out of the module** into an external bot/client process (a separate Node or Rust program) that: (1) connects to SpacetimeDB as a client over the websocket SDK, (2) subscribes to the game-state tables, (3) makes the Anthropic API calls itself, and (4) calls reducers with the result. The module side should be thin — record the query request and store the returned result for the client — while the external bot does all network/LLM work. The behavior below is preserved for intent only; the `thread::spawn`/`reqwest` steps belong in the external bot, not the module.
+
 ### 3.1 `query_database(query: STRING)`
 
 **Called by:** Frontend when the player types a question and presses Enter.

@@ -6,6 +6,9 @@
 
 ---
 
+> ⚠️ **Architecture correction (see BUGS.md Issue #2)**
+> This guide's triage steps assume the AI reasoning cycle calls the Anthropic API from inside a reducer via `std::thread::spawn` + `reqwest::blocking::Client` (e.g. "thread panic", "wrap LLM call in catch"). That architecture is **not possible**: a SpacetimeDB module runs in a sandboxed, deterministic WASM environment, so reducers **cannot make outbound network calls** and **cannot spawn OS threads**. The LLM integration must live in an external bot/client process (a separate Node or Rust program) that: (1) connects to SpacetimeDB as a client over the websocket SDK, (2) subscribes to the game-state tables, (3) makes the Anthropic API calls itself, and (4) calls reducers (e.g. `ai_submit_actions`) with the AI's chosen actions. Re-interpret the thread/network triage rows below as applying to that external bot, not to the module.
+
 ## Principle 0: Validate Before You Build On It
 
 Slice 2 transforms Slice 1 from a two-human game into a single-player experience against three LLM-powered AI opponents. It modifies the existing codebase — reducers, seed data, subscriptions — and adds the Covert dimension, AI reasoning cycles, and intel system.

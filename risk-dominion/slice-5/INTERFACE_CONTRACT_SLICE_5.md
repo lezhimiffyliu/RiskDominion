@@ -52,6 +52,9 @@ Use `#[spacetimedb(table)]` macro.
 
 ### 3.1 `ai_reasoning_cycle(ai_player_id: INT)`
 
+> ⚠️ **Architecture correction (see BUGS.md Issue #2)**
+> The parallel orchestration below runs a 4-specialist + 1-commander Claude pipeline inside this reducer via `std::thread::spawn` and `JoinHandle::join()`. This is **not possible**: a SpacetimeDB module runs in a sandboxed, deterministic WASM environment, so reducers **cannot make outbound network calls** (they cannot reach `https://api.anthropic.com`) and **cannot spawn OS threads**. Move the specialist/commander pipeline **out of the module** into an external bot/client process (a separate Node or Rust program) that: (1) connects to SpacetimeDB as a client over the websocket SDK, (2) subscribes to the game-state tables, (3) makes the Anthropic API calls itself (the parallel fan-out runs here, in real OS threads or async), and (4) calls reducers (e.g. `ai_submit_actions`) with the chosen actions and reasoning-log rows. Keep this reducer thin; the `thread::spawn`/`join` steps below belong in the external bot, not the module.
+
 **Schedule:** Unchanged from Slice 2 — three instances, 60s interval, staggered 20s apart (Zhao at 0s, Consortium at 20s, Prophet at 40s).
 
 **New logic — parallel orchestration:**
@@ -282,6 +285,9 @@ You are Warden, military specialist for the Prophet. You strike only when cultur
 ## 6. STRATEGIST CYCLE
 
 ### 6.1 Scheduled Reducer: `strategist_cycle()`
+
+> ⚠️ **Architecture correction (see BUGS.md Issue #2)**
+> The logic below has `strategist_cycle` build a prompt and call Claude from inside the reducer. This is **not possible**: a SpacetimeDB module runs in a sandboxed, deterministic WASM environment, so reducers **cannot make outbound network calls** (they cannot reach `https://api.anthropic.com`) and **cannot spawn OS threads**. Move the Strategist's LLM call **out of the module** into the external bot/client process (a separate Node or Rust program) that: (1) connects to SpacetimeDB as a client over the websocket SDK, (2) subscribes to the game-state tables, (3) makes the Anthropic API call itself, and (4) calls a reducer to record the Strategist alert/log row for the client to read. The snapshot/prompt steps below belong in that external bot, not the module reducer.
 
 **Schedule:** Every 60 seconds, offset at 50 seconds from game start (fires at 50s, 110s, 170s...). Use `#[spacetimedb(scheduled)]`.
 

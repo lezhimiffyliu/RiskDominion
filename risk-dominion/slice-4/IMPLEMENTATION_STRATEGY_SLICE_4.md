@@ -6,6 +6,9 @@
 
 ---
 
+> ⚠️ **Architecture correction (see BUGS.md Issue #2)**
+> This guide's triage steps assume the query reducers (`query_database`, `get_canned_query`, `autocomplete_query`) call Claude from inside a reducer via `std::thread::spawn` + `reqwest::blocking::Client` (e.g. "wrap Claude call in try/catch", error fallback in the reducer). That architecture is **not possible**: a SpacetimeDB module runs in a sandboxed, deterministic WASM environment, so reducers **cannot make outbound network calls** and **cannot spawn OS threads**. The LLM integration must live in an external bot/client process (a separate Node or Rust program) that: (1) connects to SpacetimeDB as a client over the websocket SDK, (2) subscribes to the game-state tables, (3) makes the Anthropic API calls itself, and (4) calls reducers with the result. Re-interpret the Claude/network triage rows below as applying to that external bot, not to the module.
+
 ## Principle 0: This Is the Final Gate
 
 Slice 4 completes the core feature set. Every feature added here must work. Slice 5 subsequently adds multi-agent orchestration and keyboard controls — but each slice must be independently stable before the next is applied.

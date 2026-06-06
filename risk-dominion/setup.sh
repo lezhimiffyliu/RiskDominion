@@ -9,7 +9,10 @@
 #   bash setup.sh                 Full setup (install + folders + key + verify)
 #   bash setup.sh --verify        Run verification checks only
 #   bash setup.sh --configure-key Update Anthropic API key
+#   bash setup.sh --deploy        Log in, publish module, generate client bindings
 #   bash setup.sh --help          Show this help message
+#
+#   SPACETIMEDB_PORT=3001 bash setup.sh   Override the default port (3000)
 
 set -euo pipefail
 
@@ -21,6 +24,20 @@ MIN_RUST_VERSION="1.75.0"
 MIN_NODE_VERSION="20.0.0"
 MIN_NPM_VERSION="10.0.0"
 MIN_SPACETIMEDB_VERSION="1.0.0"
+# Exact SpacetimeDB version this project targets. The Slice 1 module is built
+# against spacetimedb 1.12.0 (server/Cargo.lock) and the client SDK is ^1.1.1.
+# A module built for 1.x will NOT run on a 2.x host (ABI/metadata mismatch), so
+# every environment must use this exact version -- not merely ">= MIN".
+SPACETIMEDB_VERSION="1.12.0"
+
+# Single source of truth for the SpacetimeDB port (Issue #6). Override without
+# editing this file:  SPACETIMEDB_PORT=3001 bash setup.sh
+# This one value drives the .env URI, the client's VITE_SPACETIMEDB_URI, and the
+# documented `spacetime start --listen-addr 127.0.0.1:<port>` command.
+SPACETIMEDB_PORT="${SPACETIMEDB_PORT:-3000}"
+SPACETIMEDB_URI="ws://localhost:${SPACETIMEDB_PORT}"
+# Path to the client app, relative to this script (risk-dominion/).
+CLIENT_DIR="slice-1/client"
 MIN_GIT_VERSION="2.0.0"
 MIN_BASH_VERSION="4.0"
 
@@ -115,8 +132,11 @@ version_greater_or_equal() {
 }
 
 extract_version() {
-    # Extract a version string like "1.75.0" from output like "rustc 1.75.0 (abc123 2023-12-21)"
-    echo "$1" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1
+    # Extract a version string like "1.75.0" from output like "rustc 1.75.0 (abc123 2023-12-21)".
+    # The trailing `|| true` is required: under `set -euo pipefail`, a no-match `grep` makes the
+    # pipeline return non-zero, which would abort the whole script (Issue #4 -- e.g. SpacetimeDB 2.x
+    # usage text has no X.Y.Z). On a miss this now prints nothing and returns success instead.
+    echo "$1" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -220,10 +240,44 @@ install_node() {
     echo -e "  ${OK} Node.js installed"
 }
 
+get_spacetimedb_version() {
+    extract_version "$(spacetime --version 2>&1 || true)"
+}
+
+ensure_spacetimedb_version() {
+    # Make the active SpacetimeDB CLI match the exact version this project targets.
+    # The modern CLI is a version manager: `spacetime version install/use <ver>`.
+    local active
+    active=$(get_spacetimedb_version)
+
+    if [ "$active" = "$SPACETIMEDB_VERSION" ]; then
+        echo -e "  ${OK} SpacetimeDB CLI v${active} (matches required v${SPACETIMEDB_VERSION})"
+        return 0
+    fi
+
+    echo -e "  ${INFO} Active SpacetimeDB CLI is v${active:-unknown}; pinning to required v${SPACETIMEDB_VERSION}..."
+    if ! spacetime version use "$SPACETIMEDB_VERSION" >/dev/null 2>&1; then
+        spacetime version install "$SPACETIMEDB_VERSION" >/dev/null 2>&1 || true
+        spacetime version use "$SPACETIMEDB_VERSION" >/dev/null 2>&1 || true
+    fi
+
+    active=$(get_spacetimedb_version)
+    if [ "$active" = "$SPACETIMEDB_VERSION" ]; then
+        echo -e "  ${OK} SpacetimeDB CLI pinned to v${SPACETIMEDB_VERSION}"
+    else
+        echo -e "  ${WARN} Could not switch SpacetimeDB CLI to v${SPACETIMEDB_VERSION} (active: v${active:-unknown})."
+        echo -e "  ${WARN} This project requires exactly v${SPACETIMEDB_VERSION}; a mismatched host will fail to run the module."
+        echo "      Try manually: spacetime version install ${SPACETIMEDB_VERSION} && spacetime version use ${SPACETIMEDB_VERSION}"
+    fi
+}
+
 install_spacetimedb() {
     print_section "Installing SpacetimeDB CLI"
-    if check_command_exists "spacetime" && version_greater_or_equal "$(extract_version "$(spacetime --version 2>&1)")" "$MIN_SPACETIMEDB_VERSION"; then
+    # Pin to the EXACT version the project targets, not just ">= MIN". Installing
+    # "latest" yields a 2.x toolchain that cannot run this 1.x module (Issue #3).
+    if check_command_exists "spacetime"; then
         echo -e "  ${OK} SpacetimeDB CLI already installed"
+        ensure_spacetimedb_version
         return 0
     fi
 
@@ -232,9 +286,10 @@ install_spacetimedb() {
         return 1
     fi
 
-    echo "  Installing SpacetimeDB CLI via cargo..."
-    cargo install spacetimedb-cli
+    echo "  Installing SpacetimeDB CLI v${SPACETIMEDB_VERSION} via cargo..."
+    cargo install spacetimedb-cli --version "$SPACETIMEDB_VERSION" --locked
     echo -e "  ${OK} SpacetimeDB CLI installed"
+    ensure_spacetimedb_version
 }
 
 install_git() {
@@ -321,6 +376,42 @@ setup_folders() {
 # ENVIRONMENT CONFIGURATION
 # ─────────────────────────────────────────────────────────────
 
+# Strip stray CR / newline characters that would corrupt an .env value.
+sanitize_value() {
+    printf '%s' "$1" | tr -d '\r\n'
+}
+
+# Re-derive SPACETIMEDB_URI / SPACETIMEDB_PORT from an existing .env so the client
+# env stays in sync even when the user keeps a previously generated .env.
+sync_uri_from_env_file() {
+    local env_file="$1"
+    [ -f "$env_file" ] || return 0
+    local uri
+    uri=$(grep '^SPACETIMEDB_URI=' "$env_file" | head -n1 | cut -d'=' -f2- || true)
+    if [ -n "$uri" ]; then
+        SPACETIMEDB_URI="$uri"
+        SPACETIMEDB_PORT="${uri##*:}"
+    fi
+}
+
+# Write the client (Vite) env file so the browser app talks to the same port.
+# Only VITE_-prefixed vars are written here, keeping ANTHROPIC_API_KEY (root .env)
+# out of the client bundle.
+write_client_env() {
+    local client_env="${CLIENT_DIR}/.env.local"
+    if [ -d "$CLIENT_DIR" ]; then
+        {
+            echo "# Generated by setup.sh -- client (Vite) config. Do not commit."
+            echo "VITE_SPACETIMEDB_URI=${SPACETIMEDB_URI}"
+            echo "VITE_MODULE_NAME=risk-dominion"
+        } > "$client_env"
+        echo -e "  ${OK} Wrote ${client_env} (VITE_SPACETIMEDB_URI=${SPACETIMEDB_URI})"
+    else
+        echo -e "  ${INFO} ${CLIENT_DIR} not present yet; skipping client .env.local"
+        echo "      (re-run 'bash setup.sh' after generating Slice 1 to write it)"
+    fi
+}
+
 configure_env() {
     print_section "Configuring Environment"
 
@@ -332,15 +423,27 @@ configure_env() {
             rm "$env_file"
         else
             echo -e "  ${OK} Keeping existing .env"
+            sync_uri_from_env_file "$env_file"
+            write_client_env
             return 0
         fi
     fi
+
+    # Choose the SpacetimeDB port (Issue #6). Press Enter to keep the default;
+    # non-interactive runs (read hits EOF) also keep the default.
+    local port_input=""
+    read -r -p "  SpacetimeDB port [${SPACETIMEDB_PORT}]: " port_input || true
+    if [ -n "$port_input" ]; then
+        SPACETIMEDB_PORT="$port_input"
+        SPACETIMEDB_URI="ws://localhost:${SPACETIMEDB_PORT}"
+    fi
+    echo -e "  ${INFO} Using SpacetimeDB URI: ${SPACETIMEDB_URI}"
 
     # Create .env with default values
     echo "# Risk: Dominion Environment Configuration" > "$env_file"
     echo "# Generated by setup.sh" >> "$env_file"
     echo "" >> "$env_file"
-    echo "SPACETIMEDB_URI=ws://localhost:3000" >> "$env_file"
+    echo "SPACETIMEDB_URI=${SPACETIMEDB_URI}" >> "$env_file"
     echo "ANTHROPIC_MODEL=claude-sonnet-4-6" >> "$env_file"
 
     # Prompt for Anthropic API key
@@ -357,13 +460,16 @@ configure_env() {
     while [ $attempts -lt $max_attempts ]; do
         read -r -s -p "  Enter your Anthropic API key: " key
         echo ""
+        key=$(sanitize_value "$key")
 
         if [ -z "$key" ]; then
             echo -e "  ${WARN} No key entered."
         elif [[ "$key" != sk-ant-* ]]; then
             echo -e "  ${WARN} Key must start with 'sk-ant-'. Please check and try again."
         else
-            echo "ANTHROPIC_API_KEY=$key" >> "$env_file"
+            # printf (not echo) + explicit newline guarantees the key sits on its
+            # own line and cannot fuse with the next variable (Issue #7).
+            printf 'ANTHROPIC_API_KEY=%s\n' "$key" >> "$env_file"
             echo -e "  ${OK} API key configured"
             break
         fi
@@ -383,6 +489,9 @@ configure_env() {
         echo -e "  ${OK} Created .env.example"
     fi
 
+    # Keep the client (Vite) env in sync with the chosen port (Issue #6).
+    write_client_env
+
     echo ""
 }
 
@@ -400,6 +509,7 @@ configure_key_only() {
 
     read -r -s -p "  Enter your Anthropic API key: " key
     echo ""
+    key=$(sanitize_value "$key")
 
     if [ -z "$key" ]; then
         echo -e "  ${WARN} No key entered. No changes made."
@@ -411,18 +521,65 @@ configure_key_only() {
         return 1
     fi
 
-    # Replace the API key line in .env
-    if grep -q "ANTHROPIC_API_KEY=" .env; then
-        if [[ "$OSTYPE" == "darwin"* ]]; then
-            sed -i '' "s/ANTHROPIC_API_KEY=.*/ANTHROPIC_API_KEY=$key/" .env
-        else
-            sed -i "s/ANTHROPIC_API_KEY=.*/ANTHROPIC_API_KEY=$key/" .env
-        fi
-    else
-        echo "ANTHROPIC_API_KEY=$key" >> .env
-    fi
+    # Rewrite the key safely (Issue #7). Filtering out every existing
+    # ANTHROPIC_API_KEY line and appending a fresh one avoids two hazards of the
+    # old in-place `sed`: (a) sed metacharacters in the key (/, &) breaking the
+    # substitution, and (b) a malformed source line fusing the key with the next
+    # variable. printf guarantees the new key sits alone on its own newline.
+    local tmp
+    tmp="$(mktemp)"
+    grep -v '^ANTHROPIC_API_KEY=' .env > "$tmp" || true
+    printf 'ANTHROPIC_API_KEY=%s\n' "$key" >> "$tmp"
+    mv "$tmp" .env
 
     echo -e "  ${OK} API key updated"
+}
+
+# ─────────────────────────────────────────────────────────────
+# DEPLOY (login + publish + generate bindings) -- Issue #5
+# ─────────────────────────────────────────────────────────────
+
+deploy_module() {
+    print_section "Deploying Slice 1 Module"
+
+    if ! check_command_exists "spacetime"; then
+        echo -e "  ${FAIL} SpacetimeDB CLI not found. Run 'bash setup.sh' first."
+        return 1
+    fi
+    ensure_spacetimedb_version
+
+    local server_path="slice-1/server"
+    if [ ! -f "${server_path}/Cargo.toml" ]; then
+        echo -e "  ${FAIL} ${server_path} not found."
+        echo "      Generate Slice 1 first (prompts/generate_slice_1.txt)."
+        return 1
+    fi
+
+    echo "  Ensure the server is running in another terminal:"
+    echo "      spacetime start --listen-addr 127.0.0.1:${SPACETIMEDB_PORT}"
+    echo ""
+
+    echo "  [1/3] spacetime login..."
+    if ! spacetime login; then
+        echo -e "  ${FAIL} spacetime login failed"; return 1
+    fi
+
+    echo "  [2/3] spacetime publish risk-dominion..."
+    if ! spacetime publish --project-path "$server_path" risk-dominion; then
+        echo -e "  ${FAIL} spacetime publish failed (is 'spacetime start' running on port ${SPACETIMEDB_PORT}?)"
+        return 1
+    fi
+
+    echo "  [3/3] spacetime generate (typescript bindings)..."
+    if ! spacetime generate --lang typescript \
+            --out-dir "${CLIENT_DIR}/src/module_bindings" \
+            --project-path "$server_path"; then
+        echo -e "  ${FAIL} spacetime generate failed"; return 1
+    fi
+
+    echo ""
+    echo -e "  ${OK} Module published and client bindings generated."
+    echo "      Now run the client: (cd ${CLIENT_DIR} && npm install && npm run dev)"
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -499,14 +656,16 @@ run_verification() {
         verify_check "npm (not found)" 1
     fi
 
-    # SpacetimeDB CLI
+    # SpacetimeDB CLI -- must match the EXACT version the module is built for.
     if check_command_exists "spacetime"; then
         local spacetime_version
         spacetime_version=$(extract_version "$(spacetime --version 2>&1)")
-        if [ -n "$spacetime_version" ] && version_greater_or_equal "$spacetime_version" "$MIN_SPACETIMEDB_VERSION"; then
+        if [ "$spacetime_version" = "$SPACETIMEDB_VERSION" ]; then
             verify_check "SpacetimeDB CLI v${spacetime_version}" 0
+        elif [ -n "$spacetime_version" ]; then
+            verify_check "SpacetimeDB CLI v${spacetime_version} (project requires exactly v${SPACETIMEDB_VERSION}; run 'spacetime version use ${SPACETIMEDB_VERSION}')" 1
         else
-            verify_check "SpacetimeDB CLI (version ${spacetime_version:-unknown} < ${MIN_SPACETIMEDB_VERSION})" 1
+            verify_check "SpacetimeDB CLI (version unknown)" 1
         fi
     else
         verify_check "SpacetimeDB CLI (not found)" 1
@@ -626,7 +785,11 @@ show_help() {
     echo "  bash setup.sh                  Full setup (install + folders + key + verify)"
     echo "  bash setup.sh --verify         Run verification checks only"
     echo "  bash setup.sh --configure-key  Update Anthropic API key in .env"
+    echo "  bash setup.sh --deploy         Log in, publish the module, generate client bindings"
     echo "  bash setup.sh --help           Show this help message"
+    echo ""
+    echo "Environment overrides:"
+    echo "  SPACETIMEDB_PORT=3001 bash setup.sh   Use a different SpacetimeDB port"
     echo ""
     echo "The full setup will:"
     echo "  1. Check for and install missing dependencies (Rust, Node.js, Git, SpacetimeDB CLI)"
@@ -661,6 +824,10 @@ main() {
             configure_key_only
             exit 0
             ;;
+        --deploy|--publish)
+            deploy_module
+            exit $?
+            ;;
         "")
             # Full setup
             ;;
@@ -685,10 +852,20 @@ main() {
     echo "  Next steps:"
     echo "  1. Open prompts/generate_slice_1.txt in Claude Code"
     echo "  2. Claude Code will generate the Slice 1 application into slice-1/"
-    echo "  3. Start the SpacetimeDB server: spacetime start"
-    echo "  4. Open http://localhost:5173"
-    echo "  5. For each subsequent slice, open prompts/generate_slice_N.txt"
+    echo "  3. Start the SpacetimeDB server (in its own terminal):"
+    echo "       spacetime start --listen-addr 127.0.0.1:${SPACETIMEDB_PORT}"
+    echo "  4. Log in, publish the module, and generate the client bindings:"
+    echo "       spacetime login"
+    echo "       spacetime publish --project-path slice-1/server risk-dominion"
+    echo "       spacetime generate --lang typescript \\"
+    echo "         --out-dir slice-1/client/src/module_bindings \\"
+    echo "         --project-path slice-1/server"
+    echo "  5. Start the client and open it:"
+    echo "       (cd ${CLIENT_DIR} && npm install && npm run dev)"
+    echo "       then open http://localhost:5173  (?player=1 and ?player=2 in two tabs)"
+    echo "  6. For each subsequent slice, open prompts/generate_slice_N.txt"
     echo ""
+    echo "  Note: this project requires SpacetimeDB ${SPACETIMEDB_VERSION} exactly."
     echo "  For help: bash setup.sh --help"
     echo -e "${GREEN}════════════════════════════════════════════════════════${NC}"
     echo ""

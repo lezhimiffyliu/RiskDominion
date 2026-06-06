@@ -362,6 +362,9 @@ export interface ChatAnalysisAlert {
 
 ### 8.1 Server
 
+> ⚠️ **Architecture correction (see BUGS.md Issue #2)**
+> Several items below modify AI/Strategist *prompt construction* and chat evaluation that the earlier slices placed inside `ai_reasoning_cycle` / `strategist_cycle` reducers and tied to Claude calls. Per Issue #2, those Anthropic calls and the prompt construction **cannot live inside a SpacetimeDB reducer**: a module runs in a sandboxed, deterministic WASM environment and reducers **cannot make outbound network calls** or **spawn OS threads**. The LLM integration runs in an external bot/client process (a separate Node or Rust program) that connects to SpacetimeDB over the websocket SDK, subscribes to the game-state tables (including `chat_log` and `ai_trust`), makes the Anthropic API calls itself, and calls reducers (e.g. `ai_submit_actions`, `send_chat_message`) with the results. Apply the commander/Strategist prompt changes and chat-evaluation logic in that external bot's prompt-construction code; the module side stays thin (tables, `send_chat_message`, applying submitted actions/trust updates, and server-side field stripping in `subscribe_chat_log`).
+
 - Modify `lib.rs` from Slice 5.
 - Add `chat_log` and `ai_trust` tables.
 - Add `send_chat_message` reducer.

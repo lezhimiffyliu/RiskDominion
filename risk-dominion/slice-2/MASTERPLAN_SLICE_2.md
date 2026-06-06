@@ -252,6 +252,9 @@ Extract `territories_referenced` by parsing the `actions_taken` JSON string and 
 
 ### 5.8 New Scheduled Reducer: `ai_reasoning_cycle`
 
+> ⚠️ **Architecture correction (see BUGS.md Issue #2)**
+> The logic below has the reducer call the Anthropic API directly via `reqwest::blocking::Client` inside a `std::thread::spawn`. This is **not possible**: a SpacetimeDB module runs in a sandboxed, deterministic WASM environment, so reducers **cannot make outbound network calls** (they cannot reach `https://api.anthropic.com`) and **cannot spawn OS threads**. Move the LLM integration **out of the module** into an external bot/client process (a separate Node or Rust program) that: (1) connects to SpacetimeDB as a client over the websocket SDK, (2) subscribes to the game-state tables, (3) makes the Anthropic API calls itself, and (4) calls reducers (e.g. `ai_submit_actions`) with the AI's chosen actions. Keep `ai_reasoning_cycle` (or an equivalent) as a thin reducer that only builds/exposes the snapshot and records the submitted actions; the `reqwest`/`thread::spawn` block below is preserved for intent only and belongs in the external bot, not the module.
+
 Three instances with staggered schedules:
 - `ai_reasoning_cycle(2)` — Zhao — every 60s starting at 0s
 - `ai_reasoning_cycle(3)` — Consortium — every 60s starting at 20s

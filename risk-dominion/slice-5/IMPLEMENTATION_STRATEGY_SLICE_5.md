@@ -6,6 +6,9 @@
 
 ---
 
+> ⚠️ **Architecture correction (see BUGS.md Issue #2)**
+> This slice as written restructures `ai_reasoning_cycle` to run five parallel Claude calls *inside the reducer* with `std::thread::spawn` + `JoinHandle::join()`, and adds a `strategist_cycle` reducer that calls Claude. That architecture is **not possible**: a SpacetimeDB module runs in a sandboxed, deterministic WASM environment, so reducers **cannot make outbound network calls** and **cannot spawn OS threads**. The specialist/commander pipeline and the Strategist LLM call must live in an external bot/client process (a separate Node or Rust program) that: (1) connects to SpacetimeDB as a client over the websocket SDK, (2) subscribes to the game-state tables, (3) makes the Anthropic API calls itself (the parallel fan-out runs there, in real OS threads or async), and (4) calls reducers (e.g. `ai_submit_actions`, a Strategist-alert reducer) with the results. Re-interpret the thread-synchronization and Claude-call triage steps below as applying to that external bot, not to the module.
+
 ## Principle 0: This Is the Advanced Capabilities Slice
 
 Slice 5 is the final slice. After this, Risk: Dominion is not just complete — it is exceptional. The AI opponents now reason through a council of specialist subordinates. The player commands the battlefield from the keyboard. An AI Strategist watches the game and offers proactive advice.

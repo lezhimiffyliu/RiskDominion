@@ -238,6 +238,9 @@ EventFeed {
 
 ### 4.3 New Reducers
 
+> ⚠️ **Architecture correction (see BUGS.md Issue #2)**
+> The three query reducers below are specified to call the Anthropic API via `std::thread::spawn` + `reqwest::blocking::Client` (the same pattern as `ai_reasoning_cycle`). This is **not possible**: a SpacetimeDB module runs in a sandboxed, deterministic WASM environment, so reducers **cannot make outbound network calls** (they cannot reach `https://api.anthropic.com`) and **cannot spawn OS threads**. Move the LLM integration **out of the module** into an external bot/client process (a separate Node or Rust program) that: (1) connects to SpacetimeDB as a client over the websocket SDK, (2) subscribes to the game-state tables, (3) makes the Anthropic API calls itself, and (4) calls reducers with the result. For player queries, the module side should be thin — e.g. a reducer that records the query request and another that stores the returned result for the client to read — while the external bot does all network/LLM work. The `thread::spawn`/`reqwest` pattern below is preserved for intent only and belongs in the external bot, not the module.
+
 All three new reducers use the same `std::thread::spawn` + `reqwest::blocking::Client` pattern as `ai_reasoning_cycle`. Multiple threads may run concurrently — this is expected and safe. SpacetimeDB serializes reducer calls, so each thread operates on a consistent snapshot.
 
 #### `query_database(query: String)`

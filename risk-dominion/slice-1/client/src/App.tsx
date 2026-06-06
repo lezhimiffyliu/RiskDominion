@@ -5,6 +5,7 @@ import CardHand from './components/CardHand';
 import ActionBar from './components/ActionBar';
 import PlayerIndicator from './components/PlayerIndicator';
 import VictoryScreen from './components/VictoryScreen';
+import ConnectionBanner from './components/ConnectionBanner';
 import { MAX_ACTION_POINTS, PLAYER_COLORS } from './constants';
 import { countUnifiedTerritories } from './utils/territoryHelpers';
 
@@ -12,7 +13,7 @@ export default function App() {
   const params = new URLSearchParams(window.location.search);
   const playerId = parseInt(params.get('player') || '1', 10);
 
-  const { military, economic, players, gameState, client } = useSubscriptions();
+  const { military, economic, players, gameState, connectionError, client } = useSubscriptions();
   const [highlightedTerritories, setHighlightedTerritories] = useState<number[]>([]);
   const [startCalled, setStartCalled] = useState(false);
 
@@ -57,6 +58,9 @@ export default function App() {
         position: 'relative',
       }}
     >
+      {/* Connection error banner (Issue #5) */}
+      <ConnectionBanner connectionError={connectionError} />
+
       {/* Top bar */}
       <div
         style={{

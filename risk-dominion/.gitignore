@@ -1,5 +1,9 @@
 # Environment
 .env
+.env.local
+.env.*.local
+# Local backups / scratch artifacts (e.g. .env.example.local-backup)
+*.local-backup
 
 # Rust
 target/

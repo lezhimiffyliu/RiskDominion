@@ -359,7 +359,7 @@ export function getInfluencePct(cultural: CulturalRow[], territoryId: number): n
 - Modify `get_intel`: add the +10% effective agents check before threshold comparison.
 - Modify `dimension_owner_change`: update the win check query to include all four dimensions. Change threshold to 5.
 - Modify `start_game`: add Cultural table inserts and registration of `cultural_spread_tick`.
-- Update the AI prompt construction in `ai_reasoning_cycle` to include Cultural data and bonus descriptions.
+- Update the AI prompt construction to include Cultural data and bonus descriptions. ⚠️ **Architecture correction (see BUGS.md Issue #2):** this prompt construction and the Anthropic call **cannot live inside the `ai_reasoning_cycle` reducer** — a SpacetimeDB module runs in a sandboxed, deterministic WASM environment and reducers cannot make outbound network calls or spawn OS threads. The LLM integration must run in an external bot/client process that connects to SpacetimeDB over the websocket SDK, subscribes to the game-state tables, makes the Anthropic API calls itself, and calls reducers (e.g. `ai_submit_actions`) with the AI's chosen actions. Apply this change in that external bot.
 - The adjacency map function remains unchanged from Slice 1.
 
 ### 10.2 Client

@@ -1,0 +1,5 @@
+# Local Claude Code config (machine-specific; never commit)
+.claude/
+
+# OS
+.DS_Store
